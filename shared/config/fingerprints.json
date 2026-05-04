@@ -1,0 +1,26 @@
+[
+  {
+    "webgl_vendor": "Google Inc. (NVIDIA)",
+    "webgl_renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "platform": "Win32",
+    "screen_depth": 24
+  },
+  {
+    "webgl_vendor": "Google Inc. (Intel)",
+    "webgl_renderer": "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "platform": "Win32",
+    "screen_depth": 24
+  },
+  {
+    "webgl_vendor": "Apple",
+    "webgl_renderer": "Apple M1",
+    "platform": "MacIntel",
+    "screen_depth": 30
+  },
+  {
+    "webgl_vendor": "Google Inc. (AMD)",
+    "webgl_renderer": "ANGLE (AMD, AMD Radeon RX 6600 XT Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "platform": "Win32",
+    "screen_depth": 24
+  }
+]
