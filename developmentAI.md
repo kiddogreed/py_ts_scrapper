@@ -20,9 +20,9 @@
 > **AI RESUME POINT** — Update this block every session before stopping.
 
 ```
-STATUS: PHASE 1 COMPLETE — FastAPI microservice built and tested
-LAST ACTION: Phase 1 — 14 files committed (commit: 36d8250). All 11 routes verified. Parser smoke test passed.
-NEXT ACTION: Phase 2 — Next.js Dashboard (services/dashboard/)
+STATUS: PHASE 2 COMPLETE — Next.js 16 dashboard built, TypeScript clean, build passes
+LAST ACTION: Phase 2 — 29 files committed (commit: 76c9bed). 8 routes registered, prod build clean.
+NEXT ACTION: Phase 3 — Polyglot Pipeline (pipeline/navigator/ + pipeline/parser/)
 BLOCKING ISSUES: None
 ```
 
@@ -172,14 +172,14 @@ py_ts_scrapper/
 - [x] `1.10` Write Dockerfile for scraper-api
 - [x] `1.11` Integration test: parser smoke test ✅, all 11 routes verified ✅
 
-### Phase 2 — Pattern 1: Next.js Dashboard
-- [ ] `2.1` Initialize Next.js 14+ project in `services/dashboard/`
-- [ ] `2.2` Install dependencies (`axios`, `@tanstack/react-query`, `shadcn/ui`)
-- [ ] `2.3` Build `/api/jobs` Next.js API route → proxies to FastAPI
-- [ ] `2.4` Build jobs list page with real-time status
-- [ ] `2.5` Build job detail / results viewer
-- [ ] `2.6` Build proxy health dashboard
-- [ ] `2.7` Write Dockerfile for dashboard
+### Phase 2 — Pattern 1: Next.js Dashboard ✅ COMPLETE (commit: 76c9bed)
+- [x] `2.1` Initialize Next.js 16 (create-next-app) in `services/dashboard/`
+- [x] `2.2` Install dependencies: `axios`, `@tanstack/react-query`, `pg`, `@types/pg`
+- [x] `2.3` Build API routes: `/api/jobs` (GET+POST), `/api/jobs/[id]` (GET+DELETE), `/api/proxy` (GET → FastAPI), `/api/health` (GET)
+- [x] `2.4` Build jobs list page (`app/page.tsx`) — table, status badges, 5s auto-refresh, new job form, status filter
+- [x] `2.5` Build job detail page (`app/jobs/[id]/page.tsx`) — metadata, results viewer, HTML preview, intercepted XHR
+- [x] `2.6` Build proxy health page (`app/proxy/page.tsx`) — stat cards, health bar, 10s auto-refresh
+- [x] `2.7` Write multi-stage Dockerfile (standalone output, node:22-alpine, healthcheck)
 
 ### Phase 3 — Pattern 2: Polyglot Pipeline
 - [ ] `3.1` Initialize TypeScript project in `pipeline/navigator/`
@@ -1056,6 +1056,29 @@ volumes:
   - Git commit: `36d8250`
 - **Completed Phases:** Phase 1 ✅
 - **Next Session Should:** Phase 2 — Next.js Dashboard (services/dashboard/)
+
+### Session 004 — 2026-05-04
+- **Agent:** GitHub Copilot (Claude Sonnet 4.6)
+- **Actions:** Executed Phase 2 in full:
+  - Scaffolded Next.js 16.2.4 (create-next-app, TypeScript, Tailwind v4, App Router)
+  - Installed: `axios`, `@tanstack/react-query`, `pg`, `@types/pg`
+  - `lib/db.ts` — pg Pool singleton with hot-reload guard
+  - `lib/scraper-client.ts` — axios client pointing to FastAPI (SCRAPER_API_URL)
+  - `components/QueryProvider.tsx` — ReactQueryProvider wrapper (client component)
+  - `app/api/jobs/route.ts` — GET (list jobs from Postgres) + POST (create job + dispatch to FastAPI)
+  - `app/api/jobs/[id]/route.ts` — GET (job + results) + DELETE
+  - `app/api/proxy/route.ts` — GET proxy status from FastAPI
+  - `app/api/health/route.ts` — GET aggregated health check
+  - `app/page.tsx` — jobs list: table, status badges, 5s auto-refresh, create job form, status filter
+  - `app/jobs/[id]/page.tsx` — job detail: metadata, HTML preview, intercepted XHR, fingerprint viewer
+  - `app/proxy/page.tsx` — proxy health: stat cards, color health bar, 10s refresh
+  - `app/layout.tsx` — dark theme, nav (Jobs / Proxies), QueryProvider wrapper
+  - `next.config.ts` — `output: 'standalone'` for Docker
+  - `Dockerfile` — 3-stage (deps/builder/runner), node:22-alpine, HEALTHCHECK
+  - TypeScript check: clean ✅, `npm run build` clean ✅, 8 routes registered ✅
+  - Git commit: `76c9bed`
+- **Completed Phases:** Phase 2 ✅
+- **Next Session Should:** Phase 3 — Polyglot Pipeline (pipeline/navigator/ TS + pipeline/parser/ Python)
 
 ---
 
