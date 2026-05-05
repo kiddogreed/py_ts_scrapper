@@ -1,0 +1,4 @@
+# pipeline/parser/requirements.txt
+beautifulsoup4==4.12.3
+lxml==5.2.2
+asyncpg==0.29.0
