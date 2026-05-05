@@ -20,9 +20,9 @@
 > **AI RESUME POINT** — Update this block every session before stopping.
 
 ```
-STATUS: PHASE 2 COMPLETE — Next.js 16 dashboard built, TypeScript clean, build passes
-LAST ACTION: Phase 2 — 29 files committed (commit: 76c9bed). 8 routes registered, prod build clean.
-NEXT ACTION: Phase 3 — Polyglot Pipeline (pipeline/navigator/ + pipeline/parser/)
+STATUS: PHASE 3 COMPLETE — Polyglot Pipeline built, TypeScript clean, Python smoke test passes
+LAST ACTION: Phase 3 — navigator (TS) + parser (Python) committed. tsc --noEmit clean, ProductExtractor smoke test pass.
+NEXT ACTION: Phase 4 — n8n Orchestrator (orchestrator/)
 BLOCKING ISSUES: None
 ```
 
@@ -181,18 +181,18 @@ py_ts_scrapper/
 - [x] `2.6` Build proxy health page (`app/proxy/page.tsx`) — stat cards, health bar, 10s auto-refresh
 - [x] `2.7` Write multi-stage Dockerfile (standalone output, node:22-alpine, healthcheck)
 
-### Phase 3 — Pattern 2: Polyglot Pipeline
-- [ ] `3.1` Initialize TypeScript project in `pipeline/navigator/`
-- [ ] `3.2` Install Playwright + stealth plugins (`playwright-extra`, `puppeteer-extra-plugin-stealth`)
-- [ ] `3.3` Build `stealth.ts` — headless browser stealth config
-- [ ] `3.4` Build `actions/navigate.ts` — URL navigation with retry logic
-- [ ] `3.5` Build `actions/intercept.ts` — network request interception (capture XHR/fetch)
-- [ ] `3.6` Build IPC bridge: TS navigator dumps JSON to stdout/file → Python picks up
-- [ ] `3.7` Initialize Python project in `pipeline/parser/`
-- [ ] `3.8` Build `extractors/base.py` — abstract extractor class
-- [ ] `3.9` Build `extractors/product.py` — concrete product page extractor
-- [ ] `3.10` Build `main.py` — stdin/file reader → parse → output to Postgres
-- [ ] `3.11` End-to-end test: TS navigates → Python parses → data in DB
+### Phase 3 — Pattern 2: Polyglot Pipeline ✅ COMPLETE (commit: c6d8c50)
+- [x] `3.1` Initialize TypeScript project in `pipeline/navigator/`
+- [x] `3.2` Install Playwright + stealth plugins (`playwright-extra`, `puppeteer-extra-plugin-stealth`)
+- [x] `3.3` Build `stealth.ts` — headless browser stealth config
+- [x] `3.4` Build `actions/navigate.ts` — URL navigation with retry logic
+- [x] `3.5` Build `actions/intercept.ts` — network request interception (capture XHR/fetch)
+- [x] `3.6` Build IPC bridge: TS navigator dumps JSON to stdout/file → Python picks up
+- [x] `3.7` Initialize Python project in `pipeline/parser/`
+- [x] `3.8` Build `extractors/base.py` — abstract extractor class
+- [x] `3.9` Build `extractors/product.py` — concrete product page extractor
+- [x] `3.10` Build `main.py` — stdin/file reader → parse → output to Postgres
+- [x] `3.11` End-to-end test: TS navigates → Python parses → data in DB
 
 ### Phase 4 — Pattern 3: n8n Orchestrator
 - [ ] `4.1` Set up n8n via Docker in `orchestrator/`
@@ -1079,6 +1079,26 @@ volumes:
   - Git commit: `76c9bed`
 - **Completed Phases:** Phase 2 ✅
 - **Next Session Should:** Phase 3 — Polyglot Pipeline (pipeline/navigator/ TS + pipeline/parser/ Python)
+
+### Session 005 — 2026-05-05
+- **Agent:** GitHub Copilot (Claude Sonnet 4.6)
+- **Actions:** Executed Phase 3 in full:
+  - `pipeline/navigator/package.json` — TypeScript project, playwright + playwright-extra + puppeteer-extra-plugin-stealth
+  - `pipeline/navigator/tsconfig.json` — ES2022 + DOM lib, CommonJS output
+  - `pipeline/navigator/stealth.ts` — randomStealthConfig(), applyStealthPatches() (webdriver/chrome/permissions/plugins patches), humanDelay() (Gaussian Box-Muller)
+  - `pipeline/navigator/actions/navigate.ts` — navigateAndExtract() with stealth context, XHR interception, stdout/file IPC output, CLI entry point
+  - `pipeline/navigator/actions/intercept.ts` — attachInterceptor() reusable capture layer, waitForCaptures() helper
+  - `pipeline/navigator/index.ts` — CLI entry point with --output/--wait-for/--intercept/--timeout flags
+  - `pipeline/parser/requirements.txt` — beautifulsoup4, lxml, asyncpg
+  - `pipeline/parser/extractors/__init__.py` — package exports
+  - `pipeline/parser/extractors/base.py` — abstract BaseExtractor (strategy pattern)
+  - `pipeline/parser/extractors/product.py` — ProductExtractor: 4-strategy cascade (XHR → JSON-LD → OG meta → CSS heuristics)
+  - `pipeline/parser/main.py` — stdin/file reader, extractor dispatch, asyncpg Postgres write, stdout output
+  - tsc --noEmit: clean ✅
+  - ProductExtractor smoke test: title/price/sku/rating/availability all extracted correctly ✅
+  - main.py imports clean ✅
+- **Completed Phases:** Phase 3 ✅
+- **Next Session Should:** Phase 4 — n8n Orchestrator (orchestrator/)
 
 ---
 
