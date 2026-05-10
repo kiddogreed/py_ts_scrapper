@@ -17,7 +17,7 @@ from pathlib import Path
 # Loaded once at import time — file is shared/config/fingerprints.json
 # ---------------------------------------------------------------------------
 _FINGERPRINT_POOL_PATH = (
-    Path(__file__).resolve().parents[3] / "shared" / "config" / "fingerprints.json"
+    Path(__file__).resolve().parents[1] / "shared" / "config" / "fingerprints.json"
 )
 
 try:

@@ -11,6 +11,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./shared/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./orchestrator/init/02_n8n_db.sql:/docker-entrypoint-initdb.d/02_n8n_db.sql
     ports:
       - "5432:5432"
     healthcheck:
