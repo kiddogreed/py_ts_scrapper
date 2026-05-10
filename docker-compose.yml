@@ -54,10 +54,12 @@ services:
   n8n:
     image: n8nio/n8n:latest
     restart: unless-stopped
-    env_file: .env
     ports:
-      - "${N8N_PORT:-5678}:5678"
+      - "${N8N_HOST_PORT:-5679}:5678"
     environment:
+      # n8n always listens on 5678 inside the container.
+      # N8N_HOST_PORT controls the external host port only (set in .env).
+      - N8N_PORT=5678
       - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE}
       - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
       - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
@@ -67,7 +69,7 @@ services:
       - N8N_DB_POSTGRESDB_DATABASE=${N8N_DB_NAME:-n8n_db}
       - N8N_DB_POSTGRESDB_USER=${POSTGRES_USER}
       - N8N_DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
-      - WEBHOOK_URL=http://localhost:${N8N_PORT:-5678}/
+      - WEBHOOK_URL=http://localhost:${N8N_HOST_PORT:-5679}/
     depends_on:
       postgres:
         condition: service_healthy
