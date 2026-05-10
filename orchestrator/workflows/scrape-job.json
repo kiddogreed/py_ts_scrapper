@@ -1,0 +1,205 @@
+{
+  "name": "Scrape Job",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scrape-job",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "scrape-job-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate and parse the incoming job request\nconst body = $input.first().json.body || $input.first().json;\n\nif (!body.url) {\n  throw new Error('Missing required field: url');\n}\n\n// Normalise input\nconst job = {\n  url: body.url,\n  javascript: body.javascript !== false,\n  wait_for: body.wait_for || null,\n  intercept_pattern: body.intercept_pattern || null,\n  timeout_ms: body.timeout_ms || 30000,\n  max_retries: body.max_retries || 3,\n  requested_at: new Date().toISOString(),\n};\n\nreturn [{ json: job }];"
+      },
+      "id": "a1b2c3d4-0002-0002-0002-000000000002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SCRAPER_API_URL || 'http://scraper-api:8000' }}/scrape/",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "url", "value": "={{ $json.url }}" },
+            { "name": "javascript", "value": "={{ $json.javascript }}" },
+            { "name": "wait_for", "value": "={{ $json.wait_for }}" },
+            { "name": "intercept_pattern", "value": "={{ $json.intercept_pattern }}" },
+            { "name": "timeout_ms", "value": "={{ $json.timeout_ms }}" }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "a1b2c3d4-0003-0003-0003-000000000003",
+      "name": "Scrape URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [680, 300],
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "scraper-api-auth",
+          "name": "Scraper API Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SCRAPER_API_URL || 'http://scraper-api:8000' }}/parse/",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "html", "value": "={{ $json.html }}" },
+            { "name": "source_url", "value": "={{ $json.url }}" },
+            { "name": "extract_links", "value": false },
+            { "name": "extract_meta", "value": true }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "a1b2c3d4-0004-0004-0004-000000000004",
+      "name": "Parse HTML",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO jobs (url, status, pattern, metadata)\nVALUES (\n  '{{ $('Validate Input').first().json.url }}',\n  'done',\n  'n8n',\n  '{{ JSON.stringify({ scrape: $('Scrape URL').first().json, parse: $json, requested_at: $('Validate Input').first().json.requested_at }) }}'\n)\nRETURNING id, url, status, created_at;",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0005-0005-0005-000000000005",
+      "name": "Store Job",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1120, 300],
+      "credentials": {
+        "postgres": {
+          "id": "scraper-postgres",
+          "name": "Scraper Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO results (job_id, url, data, scraped_at)\nVALUES (\n  '{{ $json[0].id }}',\n  '{{ $('Validate Input').first().json.url }}',\n  '{{ JSON.stringify($('Parse HTML').first().json) }}',\n  NOW()\n);",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0006-0006-0006-000000000006",
+      "name": "Store Result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1340, 300],
+      "credentials": {
+        "postgres": {
+          "id": "scraper-postgres",
+          "name": "Scraper Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, job_id: $('Store Job').first().json[0].id, url: $('Validate Input').first().json.url, status: 'done', parsed_keys: Object.keys($('Parse HTML').first().json) }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a1b2c3d4-0007-0007-0007-000000000007",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, error: $json.message || 'Unknown error', url: $('Validate Input').first().json?.url || 'unknown' }) }}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "a1b2c3d4-0008-0008-0008-000000000008",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO dead_letter (url, error, payload)\nVALUES (\n  '{{ $('Validate Input').first().json?.url || 'unknown' }}',\n  '{{ $json.message || JSON.stringify($json) }}',\n  '{{ JSON.stringify($('Validate Input').first().json || {}) }}'\n);",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0009-0009-0009-000000000009",
+      "name": "Log Dead Letter",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [900, 500],
+      "credentials": {
+        "postgres": {
+          "id": "scraper-postgres",
+          "name": "Scraper Postgres"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]]
+    },
+    "Validate Input": {
+      "main": [[{ "node": "Scrape URL", "type": "main", "index": 0 }]]
+    },
+    "Scrape URL": {
+      "main": [[{ "node": "Parse HTML", "type": "main", "index": 0 }]]
+    },
+    "Parse HTML": {
+      "main": [[{ "node": "Store Job", "type": "main", "index": 0 }]]
+    },
+    "Store Job": {
+      "main": [[{ "node": "Store Result", "type": "main", "index": 0 }]]
+    },
+    "Store Result": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    },
+    "Log Dead Letter": {
+      "main": [[{ "node": "Error Response", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "retry-handler",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["scraping", "production"],
+  "triggerCount": 0,
+  "updatedAt": "2026-05-10T00:00:00.000Z",
+  "versionId": "1"
+}

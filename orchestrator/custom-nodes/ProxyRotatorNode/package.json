@@ -1,0 +1,22 @@
+{
+  "name": "n8n-nodes-proxy-rotator",
+  "version": "1.0.0",
+  "description": "n8n custom node: fetches the next healthy proxy from the FastAPI proxy rotation endpoint",
+  "keywords": ["n8n-community-node-package"],
+  "license": "MIT",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "dev": "tsc --project tsconfig.json --watch"
+  },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": ["./credentials/ScraperApiCredentials.credentials.js"],
+    "nodes": ["./src/ProxyRotatorNode.node.js"]
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "n8n-workflow": "*",
+    "typescript": "^5.0.0"
+  }
+}

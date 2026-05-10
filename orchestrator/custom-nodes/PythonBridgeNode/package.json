@@ -1,0 +1,28 @@
+{
+  "name": "n8n-nodes-python-bridge",
+  "version": "1.0.0",
+  "description": "n8n custom node: calls the Python FastAPI scraper service (scrape + parse endpoints)",
+  "keywords": [
+    "n8n-community-node-package"
+  ],
+  "license": "MIT",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "dev": "tsc --project tsconfig.json --watch"
+  },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "./credentials/ScraperApiCredentials.credentials.js"
+    ],
+    "nodes": [
+      "./src/PythonBridgeNode.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "n8n-workflow": "^2.16.0",
+    "typescript": "^5.0.0"
+  }
+}
