@@ -1,12 +1,16 @@
 # services/scraper-api/core/stealth.py
 """
-Browser fingerprint randomization.
+Browser fingerprint randomization + TLS profile rotation.
 
 WHY: Anti-bot systems (Cloudflare, PerimeterX, Akamai) build a fingerprint from
 dozens of browser signals — user-agent, viewport, timezone, WebGL, canvas noise,
 accepted headers. Returning a consistent fingerprint across requests is a red flag.
 This module randomizes every signal per-request so each scrape looks like a
 different real user on a different machine.
+
+Phase 5 additions:
+  - TLS_PROFILES pool for curl_cffi impersonation rotation (5.1)
+  - build_stealth_init_script(): per-request dynamic WebGL/canvas/platform injection (5.2)
 """
 import json
 import random
@@ -69,6 +73,110 @@ REFERRERS: list[str] = [
     "",  # direct navigation
 ]
 
+# ---------------------------------------------------------------------------
+# TLS impersonation profiles (5.1)
+# curl_cffi supports these Chrome/Firefox/Edge TLS profiles.
+# Rotating prevents JA3/JA4 fingerprint clustering — same impersonation
+# on every request is still a detectable pattern.
+# ---------------------------------------------------------------------------
+TLS_PROFILES: list[str] = [
+    "chrome110",
+    "chrome116",
+    "chrome120",
+    "chrome124",
+    "firefox120",
+    "edge101",
+]
+
+
+def get_random_tls_profile() -> str:
+    """Returns a random curl_cffi impersonation profile string."""
+    return random.choice(TLS_PROFILES)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic stealth init script (5.2)
+# Injects per-request WebGL/canvas/platform values from the fingerprint pool.
+# ---------------------------------------------------------------------------
+
+def build_stealth_init_script(fingerprint: dict) -> str:
+    """
+    Returns a JavaScript IIFE string with fingerprint values baked in.
+    Covers: webdriver flag, chrome runtime, permissions API, plugins,
+    languages, navigator.platform, WebGL vendor/renderer, canvas noise,
+    screen.colorDepth.
+
+    WHY dynamic (not static)? Static init scripts produce the same
+    WebGL renderer string on every page load. Anti-bot ML models learn
+    that this renderer → bot. Rotating from a pool of real hardware
+    fingerprints breaks that signal.
+    """
+    hw: dict = fingerprint.get("hardware", {})
+    webgl_vendor = hw.get("webgl_vendor", "Google Inc. (NVIDIA)").replace("'", "\\'")
+    webgl_renderer = hw.get("webgl_renderer", "ANGLE (NVIDIA)").replace("'", "\\'")
+    platform = hw.get("platform", "Win32").replace("'", "\\'")
+    screen_depth = int(hw.get("screen_depth", 24))
+    # Small random canvas noise value — different per request
+    canvas_noise = random.randint(1, 15)
+
+    return f"""
+() => {{
+    // 1. Hide webdriver flag
+    Object.defineProperty(navigator, 'webdriver', {{ get: () => undefined }});
+
+    // 2. Restore chrome runtime (absent in headless Chrome)
+    window.chrome = {{ runtime: {{}}, loadTimes: () => {{}}, csi: () => {{}} }};
+
+    // 3. Fix permissions API — returns 'denied' for notifications in headless
+    const origQuery = window.navigator.permissions.query.bind(navigator.permissions);
+    window.navigator.permissions.query = (p) =>
+        p.name === 'notifications'
+            ? Promise.resolve({{ state: Notification.permission }})
+            : origQuery(p);
+
+    // 4. Realistic plugin list
+    Object.defineProperty(navigator, 'plugins', {{ get: () => [1, 2, 3, 4, 5] }});
+
+    // 5. Language array
+    Object.defineProperty(navigator, 'languages', {{ get: () => ['en-US', 'en'] }});
+
+    // 6. Platform spoofing (Win32 / MacIntel matches the selected fingerprint)
+    Object.defineProperty(navigator, 'platform', {{ get: () => '{platform}' }});
+
+    // 7. WebGL vendor / renderer spoofing
+    const _getParam = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(p) {{
+        if (p === 37445) return '{webgl_vendor}';   // UNMASKED_VENDOR_WEBGL
+        if (p === 37446) return '{webgl_renderer}'; // UNMASKED_RENDERER_WEBGL
+        return _getParam.call(this, p);
+    }};
+    if (typeof WebGL2RenderingContext !== 'undefined') {{
+        const _getParam2 = WebGL2RenderingContext.prototype.getParameter;
+        WebGL2RenderingContext.prototype.getParameter = function(p) {{
+            if (p === 37445) return '{webgl_vendor}';
+            if (p === 37446) return '{webgl_renderer}';
+            return _getParam2.call(this, p);
+        }};
+    }}
+
+    // 8. Canvas fingerprint noise — tiny pixel delta breaks hash-based detection
+    const _toDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function(type, ...args) {{
+        const ctx = this.getContext('2d');
+        if (ctx && this.width > 0 && this.height > 0) {{
+            const img = ctx.getImageData(0, 0, 1, 1);
+            img.data[0] = (img.data[0] + {canvas_noise}) & 0xFF;
+            ctx.putImageData(img, 0, 0);
+        }}
+        return _toDataURL.apply(this, [type, ...args]);
+    }};
+
+    // 9. Screen color depth
+    Object.defineProperty(screen, 'colorDepth', {{ get: () => {screen_depth} }});
+    Object.defineProperty(screen, 'pixelDepth', {{ get: () => {screen_depth} }});
+}}
+"""
+
 
 def get_random_fingerprint() -> dict:
     """
@@ -103,27 +211,5 @@ def get_random_fingerprint() -> dict:
     }
 
 
-# Init script injected into every Playwright browser context.
-# Patches the most commonly checked navigator/window properties.
-STEALTH_INIT_SCRIPT = """
-() => {
-    // 1. Hide webdriver flag
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-
-    // 2. Restore chrome runtime (headless Chrome removes it)
-    window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {} };
-
-    // 3. Fix permissions API (returns 'denied' for notifications in headless)
-    const origQuery = window.navigator.permissions.query.bind(navigator.permissions);
-    window.navigator.permissions.query = (p) =>
-        p.name === 'notifications'
-            ? Promise.resolve({ state: Notification.permission })
-            : origQuery(p);
-
-    // 4. Fake a realistic plugin list length
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-
-    // 5. Fake languages
-    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-}
-"""
+# Backward-compatible alias — new code should call build_stealth_init_script(fingerprint)
+STEALTH_INIT_SCRIPT: str = build_stealth_init_script(get_random_fingerprint())

@@ -20,9 +20,17 @@
 > **AI RESUME POINT** — Update this block every session before stopping.
 
 ```
-STATUS: PHASE 4 COMPLETE — n8n Orchestrator implemented (workflows, custom nodes, Docker setup)
-LAST ACTION: Phase 4 — PythonBridgeNode + ProxyRotatorNode compiled clean (tsc), workflows validated (9+10 nodes), CREDENTIALS.md written.
-NEXT ACTION: Phase 5 — Stealth & Resilience Hardening
+STATUS: PHASE 5 COMPLETE — STEALTH & RESILIENCE HARDENING
+LAST ACTION: Session 009 — All 7 Phase 5 tasks implemented and smoke-tested:
+             5.1 TLS rotation (curl_cffi profiles: chrome110/116/120/124/firefox120/edge101)
+             5.2 Dynamic WebGL/canvas init script per request (build_stealth_init_script)
+             5.3 Gaussian human delays via core/timing.py (Box-Muller, human_delay/read_delay)
+             5.4 CAPTCHA detection (title/body/DOM markers) + n8n webhook alert
+             5.5 IP reputation check via proxycheck.io (proxy_manager.check_ip_reputation)
+             5.6 Per-domain token bucket rate limiter (core/rate_limiter.py, throttle_domain)
+             5.7 Postgres session persistence (load_from_db, fire-and-forget _persist_session)
+             All 7 smoke tests PASSED. Routers + main.py wired to new modules.
+NEXT ACTION: Phase 6 — Production Hardening
 BLOCKING ISSUES: None
 ```
 
@@ -203,15 +211,19 @@ py_ts_scrapper/
 - [x] `4.6` Build custom n8n node: `ProxyRotatorNode` (fetches next proxy)
 - [x] `4.7` Set up n8n credentials for Postgres + FastAPI
 - [x] `4.8` Validate custom nodes (tsc clean) + workflow JSONs (9+10 nodes parse OK)
+- [x] `4.9` Import workflows into live n8n instance (scrape-job + retry-handler)
+- [x] `4.10` Configure Postgres credential in n8n UI (host: postgres, db: scraper_db, user: scraper)
+- [x] `4.11` Activate scrape-job workflow (Published); fire test jobs → status DONE in DB
+- [x] `4.12` Fix dashboard env: DATABASE_URL → postgres hostname; add SCRAPER_API_URL=http://scraper-api:8000
 
-### Phase 5 — Stealth & Resilience Hardening
-- [ ] `5.1` Implement TLS fingerprint rotation (using `curl_cffi` in Python)
-- [ ] `5.2` Implement browser fingerprint pool (canvas, WebGL, fonts)
-- [ ] `5.3` Implement human-like timing delays (Gaussian distribution)
-- [ ] `5.4` Implement CAPTCHA detection + webhook alert
-- [ ] `5.5` Implement IP reputation check before proxy use
-- [ ] `5.6` Add rate limiting per domain (token bucket algorithm)
-- [ ] `5.7` Implement session cookie persistence across requests
+### Phase 5 — Stealth & Resilience Hardening ✅ COMPLETE (Session 009)
+- [x] `5.1` Implement TLS fingerprint rotation (curl_cffi: chrome110/116/120/124/firefox120/edge101)
+- [x] `5.2` Implement browser fingerprint pool (canvas noise, WebGL vendor/renderer, platform, colorDepth) — build_stealth_init_script() injects per-request values from fingerprints.json pool
+- [x] `5.3` Implement human-like timing delays (Gaussian Box-Muller) — core/timing.py: human_delay(), read_delay(), random_scroll_pauses(), jittered_interval()
+- [x] `5.4` Implement CAPTCHA detection + webhook alert — core/captcha_detector.py: multi-signal (title/body/DOM/status) + async n8n webhook via CAPTCHA_WEBHOOK_URL env var
+- [x] `5.5` Implement IP reputation check before proxy use — ProxyManager.check_ip_reputation() via proxycheck.io; PROXYCHECK_API_KEY env var; fails open
+- [x] `5.6` Add rate limiting per domain (token bucket algorithm) — core/rate_limiter.py: per-domain bucket, throttle_domain() on CAPTCHA, RATE_LIMIT_RPM env var
+- [x] `5.7` Implement session cookie persistence across requests — SessionPool.load_from_db() on startup, fire-and-forget _persist_session() to Postgres sessions table
 
 ### Phase 6 — Production Hardening
 - [ ] `6.1` Full Docker Compose stack (all services)
@@ -1126,6 +1138,39 @@ volumes:
 - **Bug Fixed:** Cross-package re-export violated TypeScript `rootDir` — inlined credential class in ProxyRotatorNode
 - **Completed Phases:** Phase 4 ✅
 - **Next Session Should:** Phase 5 — Stealth & Resilience Hardening
+
+### Session 009 — 2026-05-11
+- **Agent:** GitHub Copilot (Claude Sonnet 4.6)
+- **Actions:** Implemented all Phase 5 tasks:
+  - `5.1` `core/stealth.py` — Added `TLS_PROFILES` list (chrome110/116/120/124/firefox120/edge101) and `get_random_tls_profile()`. `_http_scrape` now rotates profile per request.
+  - `5.2` `core/stealth.py` — Added `build_stealth_init_script(fingerprint)`: per-request JavaScript IIFE that injects WebGL vendor/renderer, navigator.platform, screen.colorDepth/pixelDepth from the fingerprint pool, plus canvas noise (random 1–15 pixel delta). Replaced static `STEALTH_INIT_SCRIPT` in browser scrape path with dynamic call.
+  - `5.3` `core/timing.py` (new file) — `human_delay()` (Gaussian, Box-Muller, min/max clamped), `read_delay()` (proportional to content length ±20% jitter), `random_scroll_pauses()`, `jittered_interval()`. Replaced `random.gauss()` in scrape.py.
+  - `5.4` `core/captcha_detector.py` (new file) — `is_captcha_page()`: multi-signal detection (status 403/429/503 fast-path, `<title>` regex, DOM marker substring scan, body pattern regex covering Cloudflare/hCaptcha/reCAPTCHA/DataDome/PerimeterX/Incapsula). `send_captcha_alert()`: async httpx POST to CAPTCHA_WEBHOOK_URL. Wired into both `_browser_scrape` and `_http_scrape`; on CAPTCHA: fires webhook + throttles domain + invalidates session + raises HTTP 503.
+  - `5.5` `core/proxy_manager.py` — Added `check_ip_reputation()`: calls proxycheck.io v2 API (vpn+risk flags); blocks proxy only if risk>75 AND flagged as proxy; fails open. PROXYCHECK_API_KEY env var for higher limits.
+  - `5.6` `core/rate_limiter.py` (new file) — `RateLimiter`: per-domain `_Bucket` (token bucket, asyncio.Lock), `acquire()` suspends caller if empty, `throttle_domain()` halves rate on CAPTCHA, `set_domain_rate()` for manual override, RATE_LIMIT_RPM env var. Wired as `app.state.rate_limiter` in main.py, Depends() in scrape router.
+  - `5.7` `core/session_pool.py` — Added Postgres persistence: `load_from_db()` (loads valid sessions at startup via asyncpg), `_persist_session()` (fire-and-forget INSERT/upsert to sessions table), `_delete_from_db()` (on domain invalidation). All DB failures are non-fatal — graceful in-memory fallback.
+  - `main.py` — Imports RateLimiter, initialises `app.state.rate_limiter`, calls `session_pool.load_from_db()` on startup.
+  - `Bug Fixed:` `is_captcha_page()` status code check was after empty-HTML guard — moved before so `is_captcha_page('', status_code=403)` correctly returns True.
+- **Tests:** All 7 smoke tests PASSED (py_compile clean + functional assertions)
+- **New env vars:** `CAPTCHA_WEBHOOK_URL`, `PROXYCHECK_API_KEY`, `RATE_LIMIT_RPM`
+- **Completed Phases:** Phase 5 ✅
+- **Next Session Should:** Phase 6 — Production Hardening (centralized logging, health checks, pgBouncer, README)
+
+### Session 008 — 2026-05-11
+- **Agent:** GitHub Copilot (Claude Sonnet 4.6)
+- **Actions:** End-to-end stack verification and live test run:
+  - Confirmed custom nodes mounted: `docker exec n8n ls /home/node/.n8n/custom/` → PythonBridgeNode + ProxyRotatorNode ✅
+  - Imported `scrape-job.json` and `retry-handler.json` into live n8n instance via UI
+  - Created Postgres credential in n8n UI: host=`postgres`, db=`scraper_db`, user=`scraper`, password=`change_me_in_production`
+  - Activated scrape-job workflow (Published green badge ✅)
+  - Submitted test jobs from dashboard: `https://books.toscrape.com/` + `https://quotes.toscrape.com/` → both STATUS=`done` in DB ✅
+  - Confirmed results stored in `results` table (JSONB `data` column with raw HTML)
+- **Bug Fixed:** Dashboard showed "Failed to create job" — `DATABASE_URL` in `.env` used `localhost` instead of Docker service name. Fixed: `localhost:5432` → `postgres:5432`
+- **Bug Fixed:** Added `SCRAPER_API_URL=http://scraper-api:8000` to `.env` — dashboard container couldn't reach scraper-api via `localhost`
+- **DB Schema Confirmed:** Tables: `jobs`, `results`, `proxies`, `sessions`, `dead_letter`. Results stored as `{html: "<raw HTML>"}` in JSONB `data` column.
+- **Note:** Parse HTML node in workflow stores raw HTML only — structured extraction (title, links) is a Phase 5 improvement
+- **Completed:** Phase 4 fully verified in production Docker stack ✅
+- **Next Session Should:** Phase 5 — Stealth & Resilience Hardening (5.1 TLS fingerprint rotation first)
 
 ---
 

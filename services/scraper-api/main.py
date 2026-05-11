@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core.proxy_manager import ProxyManager
 from core.session_pool import SessionPool
+from core.rate_limiter import RateLimiter
 from routers import scrape, parse, proxy
 
 load_dotenv()
@@ -54,10 +55,15 @@ async def lifespan(app: FastAPI):
 
     app.state.proxy_manager = ProxyManager.from_list(raw_proxies)
     app.state.session_pool = SessionPool()
+    app.state.rate_limiter = RateLimiter()
+
+    # 5.7 — restore persisted sessions from Postgres on startup
+    loaded = await app.state.session_pool.load_from_db()
 
     logger.info(
         "startup_complete",
         proxy_pool=app.state.proxy_manager.pool_status,
+        sessions_loaded=loaded,
     )
 
     yield

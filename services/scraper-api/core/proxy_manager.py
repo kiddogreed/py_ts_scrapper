@@ -1,14 +1,20 @@
 # services/scraper-api/core/proxy_manager.py
 """
-Rotating proxy pool with health tracking.
+Rotating proxy pool with health tracking and IP reputation checks.
 
 WHY: A single IP making hundreds of requests triggers rate-limiting and bans.
 Rotating through a pool of residential/datacenter proxies distributes the load
 across many IPs. We track per-proxy failures so bad proxies are automatically
 retired without breaking the whole pool.
+
+Phase 5 addition (5.5):
+  check_ip_reputation() — validates proxy IP against proxycheck.io free API
+  before first use. High-risk/known-proxy IPs are skipped automatically.
+  Set PROXYCHECK_API_KEY in .env for higher daily rate limits.
 """
 import asyncio
 import logging
+import os
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional
@@ -105,6 +111,56 @@ class ProxyManager:
         except Exception as exc:
             logger.debug("Proxy %s validation failed: %s", proxy, exc)
             return False
+
+    async def check_ip_reputation(self, proxy: Proxy) -> bool:
+        """
+        Check the proxy IP's reputation via proxycheck.io free API.
+
+        Returns True if the IP is acceptable (low risk or reputation check
+        fails — we fail open to avoid blocking scraping when the API is down).
+
+        Blocks proxies only when BOTH conditions are true:
+          - risk score > 75  (0–100 scale, 100 = highest risk)
+          - provider flags the IP as a known proxy/VPN
+
+        Set PROXYCHECK_API_KEY in .env for higher daily request limits
+        (free tier: 100 checks/day without key, 1 000/day with free key).
+        """
+        api_key = os.getenv("PROXYCHECK_API_KEY", "").strip()
+        url = f"https://proxycheck.io/v2/{proxy.host}?vpn=1&risk=1"
+        if api_key:
+            url += f"&key={api_key}"
+
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                r = await client.get(url)
+                if r.status_code != 200:
+                    logger.debug(
+                        "Reputation API returned %d for %s — allowing",
+                        r.status_code,
+                        proxy,
+                    )
+                    return True  # Fail open
+                data = r.json()
+                entry = data.get(proxy.host, {})
+                risk_score = int(entry.get("risk", 0))
+                is_flagged_proxy = entry.get("proxy", "no").lower() == "yes"
+                if risk_score > 75 and is_flagged_proxy:
+                    logger.warning(
+                        "Proxy %s flagged — risk=%d proxy=%s",
+                        proxy,
+                        risk_score,
+                        is_flagged_proxy,
+                    )
+                    return False
+                logger.debug("Proxy %s reputation OK (risk=%d)", proxy, risk_score)
+                return True
+        except Exception as exc:
+            # Reputation API down / network error — don't block scraping
+            logger.debug(
+                "Reputation check failed for %s: %s — allowing", proxy, exc
+            )
+            return True
 
     @property
     def pool_status(self) -> dict:

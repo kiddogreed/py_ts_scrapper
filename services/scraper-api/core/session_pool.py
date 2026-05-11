@@ -7,10 +7,20 @@ Starting cold each request looks robotic. A session pool maintains cookies
 and local storage state across requests per domain — like a real browser
 that hasn't been cleared. Sessions are rotated before they expire or after
 a configurable number of uses to avoid over-association.
+
+Phase 5 addition (5.7):
+  Sessions are now persisted to the Postgres `sessions` table
+  (shared/db/schema.sql) via asyncpg. On startup, existing sessions are
+  loaded from DB so they survive service restarts. In-memory cache is still
+  used for hot path; Postgres is the source of truth.
+
+  Set DATABASE_URL in .env to enable persistence. If DATABASE_URL is absent
+  or the connection fails, the pool degrades gracefully to in-memory only.
 """
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -48,16 +58,115 @@ class Session:
 
 class SessionPool:
     """
-    In-memory session pool keyed by domain.
+    Session pool with in-memory hot cache + optional Postgres persistence.
 
-    In production this should be backed by the Postgres `sessions` table
-    (see shared/db/schema.sql). For now sessions live in memory and survive
-    as long as the FastAPI process is running.
+    On startup call await pool.load_from_db() to restore previous sessions.
+    Writes are fire-and-forget (non-blocking) — DB failures never crash a scrape.
     """
 
     def __init__(self) -> None:
         self._sessions: dict[str, list[Session]] = {}
         self._lock = asyncio.Lock()
+        self._db_url: Optional[str] = os.getenv("DATABASE_URL", "").strip() or None
+
+    # ------------------------------------------------------------------
+    # Postgres helpers
+    # ------------------------------------------------------------------
+
+    async def load_from_db(self) -> int:
+        """
+        Load valid (non-expired) sessions from the Postgres `sessions` table
+        into the in-memory cache. Call once at application startup.
+
+        Returns the number of sessions loaded, or 0 if DB is unavailable.
+        """
+        if not self._db_url:
+            return 0
+        try:
+            import asyncpg  # optional dep — only used when DATABASE_URL is set
+            conn = await asyncpg.connect(self._db_url)
+            try:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, domain, cookies, user_agent, created_at
+                    FROM sessions
+                    WHERE expires_at > NOW()
+                    ORDER BY created_at DESC
+                    LIMIT 500
+                    """
+                )
+                loaded = 0
+                for row in rows:
+                    session = Session(
+                        id=str(row["id"]),
+                        domain=row["domain"],
+                        cookies=json.loads(row["cookies"]),
+                        user_agent=row["user_agent"] or "",
+                        created_at=row["created_at"].replace(tzinfo=timezone.utc)
+                        if row["created_at"].tzinfo is None
+                        else row["created_at"],
+                    )
+                    if session.is_valid:
+                        if session.domain not in self._sessions:
+                            self._sessions[session.domain] = []
+                        self._sessions[session.domain].append(session)
+                        loaded += 1
+                logger.info("Loaded %d sessions from Postgres", loaded)
+                return loaded
+            finally:
+                await conn.close()
+        except Exception as exc:
+            logger.warning("Session DB load failed (in-memory only): %s", exc)
+            return 0
+
+    async def _persist_session(self, session: Session) -> None:
+        """Write a single session to Postgres. Fire-and-forget (exceptions are swallowed)."""
+        if not self._db_url:
+            return
+        try:
+            import asyncpg
+            conn = await asyncpg.connect(self._db_url)
+            try:
+                expires_at = session.created_at + timedelta(minutes=_SESSION_TTL_MINUTES)
+                await conn.execute(
+                    """
+                    INSERT INTO sessions (id, domain, cookies, user_agent, created_at, expires_at)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (id) DO UPDATE
+                        SET cookies = EXCLUDED.cookies,
+                            expires_at = EXCLUDED.expires_at
+                    """,
+                    session.id,
+                    session.domain,
+                    json.dumps(session.cookies),
+                    session.user_agent,
+                    session.created_at,
+                    expires_at,
+                )
+            finally:
+                await conn.close()
+        except Exception as exc:
+            logger.debug("Session persist failed (non-fatal): %s", exc)
+
+    async def _delete_from_db(self, domain: str) -> None:
+        """Remove all sessions for *domain* from Postgres when invalidated."""
+        if not self._db_url:
+            return
+        try:
+            import asyncpg
+            conn = await asyncpg.connect(self._db_url)
+            try:
+                await conn.execute(
+                    "DELETE FROM sessions WHERE domain = $1", domain
+                )
+            finally:
+                await conn.close()
+        except Exception as exc:
+            logger.debug("Session delete failed (non-fatal): %s", exc)
+
+    # ------------------------------------------------------------------
+    # Public interface (unchanged API from Phase 4)
+    # ------------------------------------------------------------------
 
     async def get_session(self, domain: str) -> Optional[Session]:
         """Return a valid existing session for the domain, or None."""
@@ -100,6 +209,9 @@ class SessionPool:
                 self._sessions[domain] = []
             self._sessions[domain].append(session)
             logger.info("Stored new session %s for %s", session.id[:8], domain)
+
+        # Persist to DB asynchronously — don't await so it doesn't slow the scrape
+        asyncio.create_task(self._persist_session(session))
         return session
 
     async def invalidate_domain(self, domain: str) -> None:
@@ -107,6 +219,7 @@ class SessionPool:
         async with self._lock:
             count = len(self._sessions.pop(domain, []))
             logger.warning("Invalidated %d session(s) for %s", count, domain)
+        asyncio.create_task(self._delete_from_db(domain))
 
     @property
     def stats(self) -> dict:
