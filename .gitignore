@@ -40,3 +40,6 @@ orchestrator/custom-nodes/**/node_modules/
 # IDE
 .vscode/
 .idea/
+
+# Personal / private docs
+earnStart.md
