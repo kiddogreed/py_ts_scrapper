@@ -23,7 +23,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -64,10 +64,13 @@ class SessionPool:
     Writes are fire-and-forget (non-blocking) — DB failures never crash a scrape.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, db_pool: Optional[Any] = None) -> None:
         self._sessions: dict[str, list[Session]] = {}
         self._lock = asyncio.Lock()
         self._db_url: Optional[str] = os.getenv("DATABASE_URL", "").strip() or None
+        # Prefer a shared asyncpg.Pool (injected at startup) for efficiency.
+        # Falls back to creating a direct connection when pool is absent.
+        self._pool: Optional[Any] = db_pool
 
     # ------------------------------------------------------------------
     # Postgres helpers
@@ -80,13 +83,13 @@ class SessionPool:
 
         Returns the number of sessions loaded, or 0 if DB is unavailable.
         """
-        if not self._db_url:
+        if not self._pool and not self._db_url:
             return 0
         try:
             import asyncpg  # optional dep — only used when DATABASE_URL is set
-            conn = await asyncpg.connect(self._db_url)
-            try:
-                rows = await conn.fetch(
+
+            async def _fetch(conn: Any) -> list:
+                return await conn.fetch(
                     """
                     SELECT id, domain, cookies, user_agent, created_at
                     FROM sessions
@@ -95,72 +98,89 @@ class SessionPool:
                     LIMIT 500
                     """
                 )
-                loaded = 0
-                for row in rows:
-                    session = Session(
-                        id=str(row["id"]),
-                        domain=row["domain"],
-                        cookies=json.loads(row["cookies"]),
-                        user_agent=row["user_agent"] or "",
-                        created_at=row["created_at"].replace(tzinfo=timezone.utc)
-                        if row["created_at"].tzinfo is None
-                        else row["created_at"],
-                    )
-                    if session.is_valid:
-                        if session.domain not in self._sessions:
-                            self._sessions[session.domain] = []
-                        self._sessions[session.domain].append(session)
-                        loaded += 1
-                logger.info("Loaded %d sessions from Postgres", loaded)
-                return loaded
-            finally:
-                await conn.close()
+
+            if self._pool:
+                async with self._pool.acquire() as conn:
+                    rows = await _fetch(conn)
+            else:
+                conn = await asyncpg.connect(self._db_url)
+                try:
+                    rows = await _fetch(conn)
+                finally:
+                    await conn.close()
+
+            loaded = 0
+            for row in rows:
+                session = Session(
+                    id=str(row["id"]),
+                    domain=row["domain"],
+                    cookies=json.loads(row["cookies"]),
+                    user_agent=row["user_agent"] or "",
+                    created_at=row["created_at"].replace(tzinfo=timezone.utc)
+                    if row["created_at"].tzinfo is None
+                    else row["created_at"],
+                )
+                if session.is_valid:
+                    if session.domain not in self._sessions:
+                        self._sessions[session.domain] = []
+                    self._sessions[session.domain].append(session)
+                    loaded += 1
+            logger.info("Loaded %d sessions from Postgres", loaded)
+            return loaded
         except Exception as exc:
             logger.warning("Session DB load failed (in-memory only): %s", exc)
             return 0
 
     async def _persist_session(self, session: Session) -> None:
         """Write a single session to Postgres. Fire-and-forget (exceptions are swallowed)."""
-        if not self._db_url:
+        if not self._pool and not self._db_url:
             return
         try:
             import asyncpg
-            conn = await asyncpg.connect(self._db_url)
-            try:
-                expires_at = session.created_at + timedelta(minutes=_SESSION_TTL_MINUTES)
-                await conn.execute(
-                    """
+            expires_at = session.created_at + timedelta(minutes=_SESSION_TTL_MINUTES)
+            sql = """
                     INSERT INTO sessions (id, domain, cookies, user_agent, created_at, expires_at)
                     VALUES ($1, $2, $3, $4, $5, $6)
                     ON CONFLICT (id) DO UPDATE
                         SET cookies = EXCLUDED.cookies,
                             expires_at = EXCLUDED.expires_at
-                    """,
-                    session.id,
-                    session.domain,
-                    json.dumps(session.cookies),
-                    session.user_agent,
-                    session.created_at,
-                    expires_at,
-                )
-            finally:
-                await conn.close()
+                    """
+            args = (
+                session.id,
+                session.domain,
+                json.dumps(session.cookies),
+                session.user_agent,
+                session.created_at,
+                expires_at,
+            )
+            if self._pool:
+                async with self._pool.acquire() as conn:
+                    await conn.execute(sql, *args)
+            else:
+                conn = await asyncpg.connect(self._db_url)
+                try:
+                    await conn.execute(sql, *args)
+                finally:
+                    await conn.close()
         except Exception as exc:
             logger.debug("Session persist failed (non-fatal): %s", exc)
 
     async def _delete_from_db(self, domain: str) -> None:
         """Remove all sessions for *domain* from Postgres when invalidated."""
-        if not self._db_url:
+        if not self._pool and not self._db_url:
             return
         try:
             import asyncpg
-            conn = await asyncpg.connect(self._db_url)
-            try:
-                await conn.execute(
-                    "DELETE FROM sessions WHERE domain = $1", domain
-                )
-            finally:
-                await conn.close()
+            sql = "DELETE FROM sessions WHERE domain = $1"
+            if self._pool:
+                async with self._pool.acquire() as conn:
+                    await conn.execute(sql, domain)
+            else:
+                conn = await asyncpg.connect(self._db_url)
+                try:
+                    await conn.execute(sql, domain)
+                finally:
+                    await conn.close()
         except Exception as exc:
             logger.debug("Session delete failed (non-fatal): %s", exc)
 

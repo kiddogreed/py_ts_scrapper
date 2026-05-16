@@ -12,6 +12,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import asyncpg
 import structlog
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -53,8 +54,34 @@ async def lifespan(app: FastAPI):
         logger.warning("proxy_list_not_found", path=proxy_list_path)
         raw_proxies = []
 
+    # ---------------------------------------------------------------------------
+    # Asyncpg connection pool (6.4 Production Hardening)
+    # WHY: asyncpg.create_pool() pre-warms a fixed number of Postgres connections.
+    # All DB operations reuse these connections instead of opening/closing per
+    # request — reduces latency by ~5ms and prevents connection exhaustion.
+    # The pool connects to pgBouncer (port 6432) in Docker, which further
+    # multiplexes connections to Postgres in transaction mode.
+    # ---------------------------------------------------------------------------
+    db_url = os.getenv("DATABASE_URL")
+    db_pool = None
+    if db_url:
+        try:
+            db_pool = await asyncpg.create_pool(
+                dsn=db_url,
+                min_size=2,
+                max_size=10,
+                command_timeout=30,
+            )
+            app.state.db_pool = db_pool
+            logger.info("db_pool_ready", min=2, max=10)
+        except Exception as exc:
+            logger.warning("db_pool_failed", error=str(exc))
+            app.state.db_pool = None
+    else:
+        app.state.db_pool = None
+
     app.state.proxy_manager = ProxyManager.from_list(raw_proxies)
-    app.state.session_pool = SessionPool()
+    app.state.session_pool = SessionPool(db_pool=db_pool)
     app.state.rate_limiter = RateLimiter()
 
     # 5.7 — restore persisted sessions from Postgres on startup
@@ -69,6 +96,9 @@ async def lifespan(app: FastAPI):
     yield
 
     # ---- Shutdown ----
+    if db_pool:
+        await db_pool.close()
+        logger.info("db_pool_closed")
     logger.info("shutdown")
 
 

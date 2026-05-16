@@ -1,5 +1,14 @@
 version: "3.9"
 
+# ---------------------------------------------------------------------------
+# Logging defaults — all services emit JSON to stdout, rotated by Docker
+# ---------------------------------------------------------------------------
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -19,6 +28,40 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # pgBouncer — connection pooler sitting in front of Postgres.
+  # WHY: asyncpg opens one connection per pool slot. Under load, many FastAPI
+  # workers can each hold an open connection. pgBouncer multiplexes them so
+  # Postgres sees at most PGBOUNCER_DEFAULT_POOL_SIZE connections regardless of
+  # how many application connections are active.
+  # Mode: transaction — connection returned to pool after each SQL transaction.
+  # ---------------------------------------------------------------------------
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    restart: unless-stopped
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_NAME=${POSTGRES_DB}
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=100
+      - DEFAULT_POOL_SIZE=20
+      - IGNORE_STARTUP_PARAMETERS=extra_float_digits
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 5432 -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    logging: *default-logging
 
   scraper-api:
     build:
@@ -29,7 +72,7 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
     volumes:
       - ./shared:/app/shared:ro
@@ -37,7 +80,9 @@ services:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 15s
       timeout: 5s
+      start_period: 20s
       retries: 3
+    logging: *default-logging
 
   dashboard:
     build:
@@ -50,6 +95,13 @@ services:
     depends_on:
       scraper-api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging: *default-logging
 
   n8n:
     image: n8nio/n8n:latest
@@ -76,6 +128,7 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
       - ./orchestrator/custom-nodes:/home/node/.n8n/custom
+    logging: *default-logging
 
 volumes:
   postgres_data:

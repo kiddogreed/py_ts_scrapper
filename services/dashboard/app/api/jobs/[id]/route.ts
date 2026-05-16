@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import pool from "@/lib/db";
+import logger from "@/lib/logger";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -36,7 +37,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
       results: resultsResult.rows,
     });
   } catch (err) {
-    console.error("GET /api/jobs/[id] error:", err);
+    logger.error({ err }, "GET /api/jobs/[id] error");
     return NextResponse.json({ error: "Failed to fetch job" }, { status: 500 });
   }
 }
@@ -61,7 +62,7 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
 
     return NextResponse.json({ deleted: id });
   } catch (err) {
-    console.error("DELETE /api/jobs/[id] error:", err);
+    logger.error({ err }, "DELETE /api/jobs/[id] error");
     return NextResponse.json({ error: "Failed to delete job" }, { status: 500 });
   }
 }

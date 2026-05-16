@@ -126,18 +126,37 @@ py_ts_scrapper/
 
 ### Option A — Full Docker stack (recommended)
 
+#### Using the launch scripts (easiest)
+
+**Git Bash / WSL:**
 ```bash
-# 1. Clone & configure
-git clone https://github.com/kiddogreed/py_ts_scrapper.git
-cd py_ts_scrapper
+cp .env.example .env          # configure once
+./start.sh                    # starts Docker Desktop if needed, builds, waits for healthy
+./stop.sh                     # stop (data preserved)
+./stop.sh --clean             # stop + wipe all volumes
+```
+
+**Windows CMD / double-click:**
+```bat
+copy .env.example .env
+start.bat
+stop.bat
+stop.bat --clean
+```
+
+The scripts handle everything automatically:
+- Launch Docker Desktop if it isn't running and wait for the daemon
+- Sync `package-lock.json` if new npm packages were added
+- Run `docker compose up --build -d`
+- Poll health endpoints until all services respond
+- Print all service URLs when ready
+
+#### Manual
+```bash
 cp .env.example .env
 # Edit .env — at minimum set POSTGRES_PASSWORD and SCRAPER_API_SECRET
-
-# 2. Build and start all services
-docker compose up --build
-
-# 3. Verify
-docker compose ps          # all services should be "healthy"
+docker compose up --build -d
+docker compose ps             # all services should show "healthy"
 ```
 
 | Service | URL |
@@ -145,16 +164,9 @@ docker compose ps          # all services should be "healthy"
 | Dashboard | http://localhost:3000 |
 | Scraper API (FastAPI) | http://localhost:8000 |
 | Swagger / API Docs | http://localhost:8000/docs |
-| n8n Orchestrator | http://localhost:5678 |
+| n8n Orchestrator | http://localhost:5679 |
+| pgBouncer | localhost:6432 |
 | PostgreSQL | localhost:5432 |
-
-```bash
-# Stop stack
-docker compose down
-
-# Stop and wipe all data volumes
-docker compose down -v
-```
 
 ---
 
@@ -442,7 +454,60 @@ Job status flow: `pending → running → done | failed | dead`
 | Phase 3 — Polyglot Pipeline | ✅ Complete | `c6d8c50` |
 | Phase 4 — n8n Orchestrator | ✅ Complete | verified live |
 | Phase 5 — Stealth Hardening | ✅ Complete | `5d19062` |
-| Phase 6 — Production Hardening | ⬜ Planned | — |
+| Phase 6 — Production Hardening | ✅ Complete | Session 010 |
+
+---
+
+## Production Hardening (Phase 6)
+
+### pgBouncer — connection pooling
+
+The stack includes a [pgBouncer](https://www.pgbouncer.org/) service that multiplexes application connections to Postgres. In `transaction` pool mode a connection is released back to the pool after each SQL transaction, allowing far more concurrent application connections than Postgres could handle directly.
+
+```
+Scraper API / Dashboard ──▶ pgBouncer :5432 (container) ──▶ Postgres :5432
+         host port 6432 ──▶│  max 100 client conns          │
+                            │  20 server connections          │
+```
+
+The image used is `edoburu/pgbouncer` (port 5432 inside the container, mapped to host port 6432). The FastAPI service also creates an `asyncpg.create_pool()` on startup (min 2, max 10) so connections within the process are reused rather than opened per request.
+
+When using Docker Compose set `DATABASE_URL` to point at pgBouncer:
+
+```env
+DATABASE_URL=postgresql://scraper:changeme@pgbouncer:5432/scraper_db
+```
+
+### Centralized structured logging
+
+| Service | Library | Format |
+|---|---|---|
+| Scraper API (Python) | `structlog` 24 | JSON to stdout |
+| Dashboard (TypeScript) | `pino` 9 | JSON to stdout |
+
+All services use the `json-file` Docker log driver with rotation (`max-size: 10m`, `max-file: 5`). Logs can be collected by any aggregator (Loki, Datadog, CloudWatch) without additional parsing.
+
+Set `LOG_LEVEL` in `.env` to control dashboard verbosity (`trace|debug|info|warn|error`).
+
+### Health checks
+
+Every service exposes a health endpoint and is monitored by Docker's healthcheck:
+
+| Service | Endpoint | Interval |
+|---|---|---|
+| Postgres | `pg_isready` | 10s |
+| pgBouncer | `pg_isready :5432` (container) | 10s |
+| Scraper API | `GET /health` | 15s |
+| Dashboard | `GET /api/health` | 30s |
+
+The `scraper-api` and `dashboard` services use `depends_on: condition: service_healthy` so they only start after their dependencies are confirmed healthy.
+
+### Secrets management
+
+- All secrets are loaded from `.env` via `python-dotenv` (Python) and `process.env` (Node.js)
+- `.env` is listed in `.gitignore` — only `.env.example` (with placeholder values) is committed
+- No passwords, API keys, or tokens are hardcoded anywhere in the source
+- Rotate secrets by updating `.env` and restarting the affected service container
 
 ---
 

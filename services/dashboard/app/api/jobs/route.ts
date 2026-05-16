@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import pool from "@/lib/db";
 import scraperClient from "@/lib/scraper-client";
+import logger from "@/lib/logger";
 
 // GET /api/jobs?status=pending&limit=50&offset=0
 export async function GET(req: NextRequest) {
@@ -37,7 +38,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ jobs: jobsResult.rows, total });
   } catch (err) {
-    console.error("GET /api/jobs error:", err);
+    logger.error({ err }, "GET /api/jobs error");
     return NextResponse.json({ error: "Failed to fetch jobs" }, { status: 500 });
   }
 }
@@ -109,7 +110,7 @@ export async function POST(req: NextRequest) {
         );
       })
       .catch(async (err) => {
-        console.error("Scrape failed for job", jobId, (err as Error)?.message);
+        logger.error({ err, jobId }, "scrape dispatch failed");
         await pool.query(
           `UPDATE jobs
            SET status = 'failed', retries = retries + 1, updated_at = NOW()
