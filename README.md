@@ -454,7 +454,13 @@ Job status flow: `pending → running → done | failed | dead`
 | Phase 3 — Polyglot Pipeline | ✅ Complete | `c6d8c50` |
 | Phase 4 — n8n Orchestrator | ✅ Complete | verified live |
 | Phase 5 — Stealth Hardening | ✅ Complete | `5d19062` |
-| Phase 6 — Production Hardening | ✅ Complete | Session 010 |
+| Phase 6 — Production Hardening | ✅ Complete | `a13d75e` |
+| Phase 7 — Multi-Tenancy & Auth | 🟡 Planned | — |
+| Phase 8 — Usage Metering & Billing | 🟡 Planned | — |
+| Phase 9 — Public API & SDKs | 🟡 Planned | — |
+| Phase 10 — Async Queue & Scheduling | 🟡 Planned | — |
+| Phase 11 — Observability & SLA | 🟡 Planned | — |
+| Phase 12 — Kubernetes & CI/CD | 🟡 Planned | — |
 
 ---
 
@@ -541,5 +547,59 @@ PROXY_LIST=socks5://user:pass@host:port
 | ADR-003 | n8n over Airflow/Celery for orchestration |
 | ADR-004 | Playwright over Puppeteer/Selenium |
 | ADR-005 | curl_cffi for HTTP-only scraping (TLS fingerprint impersonation) |
+| ADR-007 | NextAuth.js v5 for multi-tenant auth (Phase 7) |
+| ADR-008 | Credit-based metering over seat/time billing (Phase 8) |
+| ADR-009 | BullMQ + Redis replaces n8n as primary job queue (Phase 10) |
+| ADR-010 | Helm + ArgoCD for K8s GitOps CD (Phase 12) |
 
 See [`developmentAI.md`](developmentAI.md) for the full AI-agnostic development tracker and session logs.
+
+---
+
+## SaaS Roadmap (Phases 7–12)
+
+> The core infrastructure (Phases 0–6) is production-ready. Phases 7–12 evolve it into a
+> multi-tenant, billable SaaS scraping platform. Each phase is independently deployable.
+
+### Phase 7 — Multi-Tenancy & Authentication
+Add user accounts, teams, and API key management so multiple customers can use the platform without seeing each other’s data.
+- NextAuth.js v5 (Credentials + Google/GitHub OAuth) protecting all dashboard routes
+- API keys (SHA-256 hashed) verified in FastAPI via `X-API-Key` header
+- Postgres Row-Level Security scoping `jobs` and `results` to `tenant_id`
+- RBAC: `admin`, `developer`, `viewer` roles
+
+### Phase 8 — Usage Metering & Billing
+Charge customers per scrape request with a credit system; integrate Stripe for subscriptions and top-ups.
+- Credit model: 1 credit = HTTP scrape, 5 = browser scrape, 0.5 = parse
+- Metering middleware deducts atomically before executing; returns `HTTP 402` when exhausted
+- Stripe Products: Free (100 cr/mo), Pro (5 000 cr/mo), Enterprise (custom)
+- Stripe webhooks restore credits on `invoice.paid`; hosted customer portal at `/billing`
+
+### Phase 9 — Public API & Developer Experience
+Publish a versioned REST API, typed SDKs, webhook delivery, and a documentation site so developers can integrate without touching the dashboard.
+- Versioned routes under `/api/v1/`; OpenAPI 3.1 spec at `api.domain.com/docs`
+- `@scraper/client` npm package and `scraper-client` PyPI package (auto-generated from spec)
+- Webhook delivery with HMAC-SHA256 signatures and 3× retry
+- In-dashboard playground for no-code scrape testing
+
+### Phase 10 — Async Job Queue & Scheduling
+Replace n8n as the throughput layer with BullMQ for high-concurrency, prioritised, and scheduled scraping.
+- BullMQ (Redis-backed) queues: `scrape-http`, `scrape-browser`, `parse`, `webhook-delivery`
+- Job priorities (critical/high/normal/low); per-tenant concurrency limits
+- Cron/scheduled scrapes with pause/resume/delete
+- SSE stream endpoint replaces polling for real-time job status in dashboard
+
+### Phase 11 — Observability & SLA Monitoring
+Give operators full visibility into platform health and SLA compliance.
+- Prometheus metrics from FastAPI; Grafana dashboards (success rate, p50/p95/p99, credits/hr)
+- AlertManager rules → Slack/PagerDuty for error rate >5%, queue depth >1000
+- OpenTelemetry distributed tracing (FastAPI + Next.js); trace IDs in all logs
+- Per-tenant SLA tracking (uptime %, p95 latency) visible in their dashboard account page
+
+### Phase 12 — Kubernetes & CI/CD
+Containerise the platform for cloud deployment with full GitOps automation.
+- Helm chart `charts/scraper-platform` for all services
+- HPA on scraper-api (CPU) and worker (KEDA queue-depth metric)
+- GitHub Actions CI: lint, test, Docker build, Trivy image scan, push to GHCR
+- ArgoCD GitOps CD watching `k8s/`; manual gate for production namespace
+- External Secrets Operator pulling secrets from AWS SSM / HashiCorp Vault

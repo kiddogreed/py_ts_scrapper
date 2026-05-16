@@ -20,15 +20,18 @@
 > **AI RESUME POINT** — Update this block every session before stopping.
 
 ```
-STATUS: PHASE 6 COMPLETE — PRODUCTION HARDENING
+STATUS: SAAS PLANNING — PHASES 7-12 DEFINED
 LAST ACTION: Session 011 — Post-Phase 6 fixes and automation scripts:
              - Switched pgBouncer Docker image: bitnami/pgbouncer (404) → edoburu/pgbouncer:latest
-             - Fixed pgBouncer env vars (DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME) and port mapping (6432:5432)
-             - Updated DATABASE_URL in .env from pgbouncer:6432 → pgbouncer:5432 (edoburu listens on 5432 internally)
-             - Ran npm install in services/dashboard/ to sync package-lock.json (pino was added to package.json without installing)
-             - Created automation scripts: start.sh, start.bat, stop.sh, stop.bat at project root
-             - README.md updated: Quick Start now documents launch scripts; pgBouncer port references corrected; n8n port corrected (5679)
-NEXT ACTION: All phases complete — project is production-ready
+             - Fixed pgBouncer env vars and port mapping (6432:5432)
+             - Updated DATABASE_URL in .env from pgbouncer:6432 → pgbouncer:5432
+             - Ran npm install in services/dashboard/ to sync package-lock.json
+             - Created automation scripts: start.sh, start.bat, stop.sh, stop.bat
+             - README.md updated: Quick Start with launch scripts, pgBouncer ports corrected, n8n port corrected (5679)
+             - SaaS pivot: Phases 7-12 planned and documented in developmentAI.md
+NEXT ACTION: Phase 7.1 — Add users/teams/api_keys tables to shared/db/schema.sql;
+             then 7.2 NextAuth.js v5 + API key middleware in dashboard;
+             then 7.3 FastAPI X-API-Key header auth
 BLOCKING ISSUES: None
 ```
 
@@ -46,6 +49,9 @@ using three architectural patterns that work independently and together:
 | 3. n8n Orchestrator | n8n + Bridge Nodes | Workflow automation & state mgmt |
 
 **Anti-bot Priority:** Every layer must implement stealth and resilience by default.
+
+> **📅 2026-05-17 SaaS Pivot:** Phases 7–12 extend the core infrastructure into a
+> multi-tenant, billable SaaS scraping platform. All Phase 1–6 foundations remain intact.
 
 ---
 
@@ -233,9 +239,66 @@ py_ts_scrapper/
 
 ---
 
-## 🏗️ Architecture Decisions (ADRs)
+### Phase 7 — Multi-Tenancy & Authentication _(SaaS Foundation)_
+- [ ] `7.1` **DB schema** — Add `users`, `teams`, `api_keys`, `subscriptions`, `usage_events` tables to `shared/db/schema.sql`; Row-Level Security policies on `jobs`, `results` scoped to `tenant_id`
+- [ ] `7.2` **NextAuth.js v5** — Install in dashboard; Credentials + Google/GitHub OAuth providers; JWT session strategy; protect all `/app` routes via middleware
+- [ ] `7.3` **API key system** — Generate SHA-256 hashed keys; `POST /api/keys` to create, `DELETE /api/keys/[id]` to revoke; store prefix + hash (never plaintext)
+- [ ] `7.4` **FastAPI auth middleware** — `X-API-Key` header validation against DB hash; inject `tenant_id` into request state; 401 on missing/invalid key
+- [ ] `7.5` **RBAC** — Three roles: `admin` (all), `developer` (create/view own jobs), `viewer` (read-only); enforced at API route level
+- [ ] `7.6` **Tenant isolation** — All scrape/job queries include `WHERE tenant_id = $1`; RLS as second layer; no cross-tenant data leakage
+- [ ] `7.7` **Dashboard auth UI** — Login page, sign-up, profile page, API key management page, team invite (email)
+- [ ] `7.8` **Test** — Register two tenants; verify jobs of tenant A are invisible to tenant B via API and dashboard
 
-> Every "Why" is documented here so any AI or developer can understand the reasoning.
+### Phase 8 — Usage Metering & Billing
+- [ ] `8.1` **Credit model** — 1 credit = 1 HTTP scrape, 5 credits = 1 browser scrape, 0.5 credits = 1 parse; configurable per pricing tier in DB
+- [ ] `8.2` **Metering middleware** — FastAPI dependency checks `credits_remaining > 0` before executing scrape; atomically deducts credits; writes `usage_events` row
+- [ ] `8.3` **Stripe integration** — Products: Free (100 credits/mo), Pro (5 000 credits/mo), Enterprise (custom); `stripe.checkout.Session` for upgrades
+- [ ] `8.4` **Stripe webhooks** — Handle `invoice.paid` (top-up credits), `customer.subscription.deleted` (downgrade to free), `customer.subscription.updated`
+- [ ] `8.5` **Customer portal** — Stripe hosted portal link at `/billing`; invoice history, cancel, upgrade/downgrade
+- [ ] `8.6` **Usage dashboard** — Credits used today/this month, live burn rate chart (TanStack Query polling), per-endpoint breakdown, export CSV
+- [ ] `8.7` **Over-limit handling** — Return `HTTP 402 Payment Required` with `{"error": "credit_exhausted", "upgrade_url": ...}` instead of scraping
+- [ ] `8.8` **Test** — Exhaust credits on a free account; verify 402 response; simulate `invoice.paid` webhook; verify credits restored
+
+### Phase 9 — Public API & Developer Experience
+- [ ] `9.1` **Versioned API** — Mount all public routes under `/api/v1/`; include `API-Version` response header; deprecation notices in OpenAPI tags
+- [ ] `9.2` **OpenAPI 3.1 spec** — Auto-generated from FastAPI; add `securitySchemes: apiKey`; publish at `api.domain.com/docs`
+- [ ] `9.3` **TypeScript SDK** — `@scraper/client` npm package: typed methods for `scrape()`, `parse()`, `getJob()`, `listJobs()`; auto-generated from OpenAPI spec
+- [ ] `9.4` **Python SDK** — `scraper-client` PyPI package: same methods, async-first (`httpx`); auto-generated from OpenAPI spec
+- [ ] `9.5` **Webhook delivery** — User registers `webhook_url` per job or globally; on job completion FastAPI POSTs signed payload (`X-Scraper-Signature: hmac-sha256`); retry 3×
+- [ ] `9.6` **Playground UI** — Dashboard page to test scrape configs live: URL input, mode selector (http/browser), custom headers, response viewer with raw/parsed tabs
+- [ ] `9.7` **API reference docs** — Mintlify or Fumadocs static site at `docs.domain.com`; code samples in Python, TypeScript, curl; generated from OpenAPI spec
+- [ ] `9.8` **Test** — Call every v1 endpoint from both SDKs; verify webhook delivery + signature; confirm playground returns same result as direct API call
+
+### Phase 10 — Async Job Queue & Scheduling
+- [ ] `10.1` **BullMQ** — Add Redis service to `docker-compose.yml`; replace n8n as primary job queue; queues: `scrape-http`, `scrape-browser`, `parse`, `webhook-delivery`
+- [ ] `10.2` **Job priorities** — Four levels: `critical` (0), `high` (1), `normal` (5), `low` (10); enterprise tenants get elevated default priority
+- [ ] `10.3` **Scheduled / cron scrapes** — User-defined `cron` expression stored in DB; BullMQ repeatable jobs; pause/resume/delete via API
+- [ ] `10.4` **Real-time status** — SSE endpoint `GET /api/v1/jobs/[id]/stream`; dashboard job detail page subscribes; eliminates polling
+- [ ] `10.5` **Concurrency limits** — Per-tenant max concurrent jobs configurable (Free: 2, Pro: 10, Enterprise: 50); enforced at queue worker level
+- [ ] `10.6` **Dead letter queue** — Failed jobs after max retries moved to `dead_letter` queue; dashboard DLQ page; manual requeue button
+- [ ] `10.7` **Worker service** — New `services/worker/` Node.js service with BullMQ workers; containerised with its own Dockerfile; added to `docker-compose.yml`
+- [ ] `10.8` **Test** — Submit 20 concurrent jobs; verify concurrency limits enforced; verify cron fires at correct time; verify SSE delivers updates in <1s
+
+### Phase 11 — Observability & SLA Monitoring
+- [ ] `11.1` **Prometheus** — Add `prometheus-fastapi-instrumentator` to scraper-api; expose `/metrics`; add Prometheus container to `docker-compose.yml`
+- [ ] `11.2` **Grafana** — Add Grafana container; provision datasource (Prometheus + Postgres); pre-built dashboards: scrape success rate, latency p50/p95/p99, credits burned/hr, active sessions, proxy health
+- [ ] `11.3` **AlertManager** — Rules: error rate >5% for 5min → Slack; queue depth >1000 → PagerDuty; credit exhaustion spike → email; add AlertManager container
+- [ ] `11.4` **OpenTelemetry** — Instrument FastAPI + Next.js API routes with `opentelemetry-sdk`; export traces to Jaeger (or Grafana Tempo); trace ID propagated in headers
+- [ ] `11.5` **SLA tracking** — Per-tenant uptime % and p95 latency stored in Postgres (5-min rollups); visible in dashboard account page; breach triggers email alert
+- [ ] `11.6` **Synthetic monitoring** — n8n workflow fires a canary scrape every 5 min against a known stable URL; records success/latency; feeds Grafana
+- [ ] `11.7` **Test** — Trigger a 5-min error storm; verify AlertManager fires Slack message; confirm p95 latency visible in Grafana within 2 scraping cycles
+
+### Phase 12 — Kubernetes & CI/CD
+- [ ] `12.1` **K8s manifests** — `k8s/` directory: Deployments (scraper-api, dashboard, worker), Services, Ingress (nginx), ConfigMaps, Secrets (sealed)
+- [ ] `12.2` **Horizontal Pod Autoscaler** — HPA on scraper-api (CPU >70% → scale up to 10 pods) and worker (queue depth metric via KEDA)
+- [ ] `12.3` **Helm chart** — Package all K8s manifests as `charts/scraper-platform`; `values.yaml` with image tags, replica counts, resource limits
+- [ ] `12.4` **GitHub Actions CI** — On PR: lint (ruff + eslint), unit tests, Docker build, `trivy` image scan; on merge to main: push images to GHCR with SHA tag
+- [ ] `12.5` **ArgoCD CD** — GitOps: ArgoCD watches `k8s/` directory; auto-sync on main push; manual gate for production namespace
+- [ ] `12.6` **Secrets management** — External Secrets Operator pulling from AWS SSM Parameter Store (or HashiCorp Vault); no secrets in Git
+- [ ] `12.7` **Multi-region proxy affinity** — Proxy pool tagged by region; jobs with `region` hint routed to matching worker pods in that region
+- [ ] `12.8` **Test** — Deploy to staging K8s cluster; run load test (k6, 500 RPS for 60s); verify HPA scales; ArgoCD shows synced; rollback works
+
+> Every “Why” is documented here so any AI or developer can understand the reasoning.
 
 ### ADR-001: Why Python for Parsing, TypeScript for Navigation?
 
@@ -306,6 +369,58 @@ py_ts_scrapper/
 - Scrape jobs have relational structure: job → results → proxy_used → session.
 - JSONB columns handle flexible result schemas without losing SQL query power.
 - n8n natively integrates with Postgres for workflow execution history.
+
+### ADR-007: Why NextAuth.js v5 for Multi-Tenant Auth? _(Phase 7)_
+
+**Decision:** NextAuth.js v5 (Auth.js) as the authentication layer for the SaaS dashboard.
+
+**Reasoning:**
+- Already in the Next.js ecosystem; zero additional infrastructure.
+- v5 supports the App Router (`auth()` server components, `middleware.ts` matcher).
+- Supports both OAuth (Google/GitHub for quick sign-up) and Credentials (email/password for B2B).
+- API key auth runs separately in FastAPI — dashboard auth (sessions) and API auth (keys) serve
+  different client types (humans vs. machines) and must not be conflated.
+- Alternative (Clerk) adds a paid third-party dependency; NextAuth keeps auth self-hosted.
+
+### ADR-008: Why Credit-Based Metering Over Seat-Based Billing? _(Phase 8)_
+
+**Decision:** Credit system (per-request) rather than seat or time-based billing.
+
+**Reasoning:**
+- Scraping costs correlate with usage, not headcount — credits map directly to compute cost.
+- Different request types have different costs (browser = 5× HTTP) — credits express this
+  naturally; seat/time models cannot.
+- Credits enable pay-as-you-go top-ups without a subscription change, reducing churn.
+- Stripe Metered Billing achieves the same but adds latency to usage tracking; a local
+  Postgres counter is instant and can enforce limits synchronously mid-request.
+
+### ADR-009: Why BullMQ Over Celery/n8n as Primary Queue? _(Phase 10)_
+
+**Decision:** BullMQ (Node.js, Redis-backed) replaces n8n as the primary job queue for Phase 10+.
+
+**Reasoning:**
+- n8n is excellent for visual workflow authoring and ad-hoc automation but is not designed as
+  a high-throughput job queue. It cannot handle 100s of concurrent jobs efficiently.
+- BullMQ is purpose-built for job queues: concurrency limits, priorities, rate limiting, delayed
+  jobs, and repeatable (cron) jobs are first-class features.
+- Redis is already the natural store for ephemeral queue state; Postgres retains durable
+  job records. The two complement each other — Redis for speed, Postgres for history.
+- n8n is retained for alert workflows, webhook triggers, and human-facing automation
+  (non-throughput use cases).
+- Alternative (Celery) requires Python workers; our worker code is Node.js to match the
+  existing TypeScript pipeline — BullMQ keeps the stack consistent.
+
+### ADR-010: Why Helm + ArgoCD Over Raw Manifests for K8s? _(Phase 12)_
+
+**Decision:** Helm chart packaged in `charts/` + ArgoCD for GitOps CD.
+
+**Reasoning:**
+- Helm parameterises per-environment differences (image tags, replicas, resource limits) without
+  duplicating manifest files.
+- ArgoCD provides a reconciliation loop — drift between Git and cluster state is detected and
+  auto-corrected, preventing configuration decay across environments.
+- GitHub Actions handles CI (lint, test, build, push) up to GHCR; ArgoCD handles CD from there.
+  This separation keeps the CI pipeline stateless and the CD process auditable via Git history.
 
 ---
 
@@ -1201,6 +1316,7 @@ volumes:
   - **README.md updated:** Quick Start section now documents `./start.sh` / `start.bat` as primary method; manual `docker compose` steps kept as fallback. n8n URL corrected from port 5678 → 5679. pgBouncer port diagram and `DATABASE_URL` example corrected to use internal port 5432. Health check table corrected to `pg_isready :5432 (container)`.
 - **Bugs Fixed:** bitnami/pgbouncer image (404), DATABASE_URL wrong port, npm ci lockfile mismatch.
 - **New files:** `start.sh`, `start.bat`, `stop.sh`, `stop.bat`
+- **Git:** Committed and pushed to `origin/main` — commit `a13d75e` "feat: Phase 6 — Production Hardening complete" (16 files changed, 762 insertions, 107 deletions)
 - **Completed Phases:** No new phases — all 6 remain complete. Post-release stabilisation.
 
 ---
