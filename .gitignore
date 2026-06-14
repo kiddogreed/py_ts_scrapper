@@ -42,5 +42,5 @@ orchestrator/custom-nodes/**/node_modules/
 .idea/
 
 # Personal / private docs
-earnStart.md
-developmentAI.md
+./private
+
